@@ -14,6 +14,8 @@
 #include "derpcl/cl.h"
 #include "timing.h"
 
+#define SIM_GLDISP 0
+
 using namespace derpcl;
 using namespace std;
 
@@ -138,6 +140,10 @@ _X_TIMER_SETUP
 	Program filters(env, "lanczos3.cl", false);
 
 	Kernel
+		xlcache(filters, "buildcache"),
+		xccache(filters, "buildcache"),
+		ylcache(filters, "buildcache"),
+		yccache(filters, "buildcache"),
 		fx_y(filters, "filter_x"),
 		fx_u(filters, "filter_x"),
 		fx_v(filters, "filter_x"),
@@ -145,11 +151,64 @@ _X_TIMER_SETUP
 		fy_u(filters, "filter_y"),
 		fy_v(filters, "filter_y");
 
+	// PRECOMPUTE
+	int xfw, yfw;
+	{
+		int midpt, left, right;
+
+		midpt = out_width/2;
+		left = (int)floorf((float)(midpt-2) / x_scale);
+		right = (int)ceilf((float)(midpt+3) / x_scale);
+
+		xfw = right-left+1;
+		xfw = xfw < 6 ? 6 : xfw;
+
+		midpt = out_height/2;
+		left = (int)floorf((float)(midpt-2) / y_scale);
+		right = (int)ceilf((float)(midpt+3) / y_scale);
+
+		yfw = right-left+1;
+		yfw = yfw < 6 ? 6 : yfw;
+	}
+	cerr << "[-] x-filter-width: " << xfw << endl
+	     << "[-] y-filter-width: " << yfw << endl;
+
+	Buffer<cl_float>
+		xlf(env, MemoryType::ReadWrite, xfw * out_width),
+		xcf(env, MemoryType::ReadWrite, xfw * ((out_width / 2)+1)),
+		ylf(env, MemoryType::ReadWrite, yfw * out_height),
+		ycf(env, MemoryType::ReadWrite, yfw * ((out_height / 2)+1));
+
+	try {
+		cl_event rev[4];
+
+		xlcache.setArgument(0, x_scale);
+		xlcache.setArgumentBuffer(1, xlf);
+		rev[0] = xlcache.run(out_width);
+
+		ylcache.setArgument(0, y_scale);
+		ylcache.setArgumentBuffer(1, ylf);
+		rev[1] = ylcache.run(out_height);
+
+		xccache.setArgument(0, x_scale);
+		xccache.setArgumentBuffer(1, xcf);
+		rev[2] = xccache.run(out_width/2);
+
+		yccache.setArgument(0, y_scale);
+		yccache.setArgumentBuffer(1, ycf);
+		rev[3] = yccache.run(out_height/2);
+
+		clWaitForEvents(4, rev);
+
+	} catch (string s) {
+		cerr << s << endl;
+	}
+
+
 #define HOST_IMG(width,height) Image(env, MemoryType::PinnedReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 #define DEV_IMG(width,height) Image(env, MemoryType::ReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 #define DEV_RIMG(width,height) Image(env, MemoryType::ReadOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 #define DEV_WIMG(width,height) Image(env, MemoryType::WriteOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
-#define FILTER(size) Buffer<cl_float>(env, MemoryType::ReadWrite, size*8)
 
 #define LUM_PLANE(iw,ih,ow,oh) \
 HOST_IMG(iw, ih), \
@@ -192,23 +251,35 @@ plane.dest_p = static_cast<uint8_t*>(plane.host_d.data());
 		SET_HPTRS(u);
 		SET_HPTRS(v);
 
-#define SET_FX_ARG(kern,plane) \
+#define SET_LFX_ARG(kern,plane) \
 kern.setArgument(0, x_scale); \
-kern.setArgumentImage(1, (plane).dev_s); \
-kern.setArgumentImage(2, (plane).dev_x);
+kern.setArgumentBuffer(1, xlf); \
+kern.setArgumentImage(2, (plane).dev_s); \
+kern.setArgumentImage(3, (plane).dev_x);
+#define SET_CFX_ARG(kern,plane) \
+kern.setArgument(0, x_scale); \
+kern.setArgumentBuffer(1, xcf); \
+kern.setArgumentImage(2, (plane).dev_s); \
+kern.setArgumentImage(3, (plane).dev_x);
 
-		SET_FX_ARG(fx_y, y);
-		SET_FX_ARG(fx_u, u);
-		SET_FX_ARG(fx_v, v);
+		SET_LFX_ARG(fx_y, y);
+		SET_CFX_ARG(fx_u, u);
+		SET_CFX_ARG(fx_v, v);
 
-#define SET_FY_ARG(kern,plane) \
+#define SET_LFY_ARG(kern,plane) \
 kern.setArgument(0, y_scale); \
-kern.setArgumentImage(1, (plane).dev_x); \
-kern.setArgumentImage(2, (plane).dev_d);
+kern.setArgumentBuffer(1, ylf); \
+kern.setArgumentImage(2, (plane).dev_x); \
+kern.setArgumentImage(3, (plane).dev_d);
+#define SET_CFY_ARG(kern,plane) \
+kern.setArgument(0, y_scale); \
+kern.setArgumentBuffer(1, ycf); \
+kern.setArgumentImage(2, (plane).dev_x); \
+kern.setArgumentImage(3, (plane).dev_d);
 
-		SET_FY_ARG(fy_y, y);
-		SET_FY_ARG(fy_u, u);
-		SET_FY_ARG(fy_v, v);
+		SET_LFY_ARG(fy_y, y);
+		SET_CFY_ARG(fy_u, u);
+		SET_CFY_ARG(fy_v, v);
 
 		stime = _x_time();
 		ssize_t rd_count;
@@ -227,7 +298,9 @@ kern.setArgumentImage(2, (plane).dev_d);
 			y.ewrite = y.dev_s.queueWrite(y.src_p);
 			y.efx = fx_y.run(out_width, in_height, y.ewrite);
 			y.efy = fy_y.run(out_width, out_height, y.efx);
+#if SIM_GLDISP == 0
 			y.eread = y.dev_d.queueRead(y.dest_p, y.efy);
+#endif
 
 			// Read U
 			rd_count = read(src_fd, u.src_p, in_chr_sz);
@@ -239,7 +312,9 @@ kern.setArgumentImage(2, (plane).dev_d);
 			u.ewrite = u.dev_s.queueWrite(u.src_p);
 			u.efx = fx_u.run(out_width/2, in_height/2, u.ewrite);
 			u.efy = fy_u.run(out_width/2, out_height/2, u.efx);
+#if SIM_GLDISP == 0
 			u.eread = u.dev_d.queueRead(u.dest_p, u.efy);
+#endif
 
 			// Read V
 			rd_count = read(src_fd, v.src_p, in_chr_sz);
@@ -251,22 +326,30 @@ kern.setArgumentImage(2, (plane).dev_d);
 			v.ewrite = v.dev_s.queueWrite(v.src_p);
 			v.efx = fx_v.run(out_width/2, in_height/2, v.ewrite);
 			v.efy = fy_v.run(out_width/2, out_height/2, v.efx);
+#if SIM_GLDISP == 0
 			v.eread = v.dev_d.queueRead(v.dest_p, v.efy);
+#endif
 
 			fprintf(stderr, "Scaling frame %lld\r", i+1);
 
+#if SIM_GLDISP == 1
+			// Write Y
+			clWaitForEvents(1, &y.efx);
+			// Write U
+			clWaitForEvents(1, &u.efx);
+			// Write V
+			clWaitForEvents(1, &v.efx);
+#else
 			// Write Y
 			clWaitForEvents(1, &y.eread);
 			write(dest_fd, y.dest_p, out_lum_sz);
-
 			// Write U
 			clWaitForEvents(1, &u.eread);
 			write(dest_fd, u.dest_p, out_chr_sz);
-
 			// Write V
 			clWaitForEvents(1, &v.eread);
 			write(dest_fd, v.dest_p, out_chr_sz);
-
+#endif
 		}
 
 		etime = _x_time();
