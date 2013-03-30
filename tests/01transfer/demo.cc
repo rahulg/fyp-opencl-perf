@@ -8,6 +8,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include <cmath>
+#include <algorithm>
+
 #include "derpcl/cl.h"
 #include "timing.h"
 
@@ -19,6 +22,8 @@ typedef struct {
 	uint8_t *src_p, *dest_p;
 	cl_event eread, escale, efx, efy, ewrite;
 } plane_t;
+
+float lanczos3(float x);
 
 int main(int argc, char const *argv[])
 {
@@ -133,7 +138,6 @@ _X_TIMER_SETUP
 	Program filters(env, "lanczos3.cl", false);
 
 	Kernel
-		pregen(filters, "pregen"),
 		fx_y(filters, "filter_x"),
 		fx_u(filters, "filter_x"),
 		fx_v(filters, "filter_x"),
@@ -165,19 +169,15 @@ DEV_WIMG(ow, oh)
 		CHR_PLANE(in_width, in_height, out_width, out_height)
 	};
 
-	Buffer<cl_float>
-		filter_x(env, MemoryType::ReadWrite, 7),
-		filter_y(env, MemoryType::ReadWrite, 7);
 
 	double ttl_time = 0.0;
 	uint64_t stime, etime;
 
 	try {
 
-		pregen.setArgument(0, x_scale);
-		pregen.setArgument(1, y_scale);
-		pregen.setArgumentBuffer(2, filter_x);
-		pregen.setArgumentBuffer(3, filter_y);
+		Buffer<cl_float>
+			filter_x(env, MemoryType::ReadWrite, in_width*8),
+			filter_y(env, MemoryType::ReadWrite, in_height*8);
 
 #define MAP_HPTRS(plane) \
 plane.host_s.map(MapMode::Write); \
@@ -218,16 +218,47 @@ kern.setArgumentImage(3, (plane).dev_d);
 		stime = _x_time();
 		ssize_t rd_count;
 
-		cl_event egen = pregen.run(1);
-		clWaitForEvents(1, &egen);
+		// PREGEN1 START
+		float
+			xsc = min(x_scale, 1.0f),
+			ysc = min(y_scale, 1.0f),
+			xsup = 3.0f / xsc,
+			ysup = 3.0f / ysc;
 
-		cl_float xxx[7], yyy[7];
-		cl_event wev0 = filter_x.queueRead(xxx);
-		cl_event wev1 = filter_y.queueRead(yyy);
+		cl_float* xdata = new cl_float[in_width * 8];
+		cl_float* ydata = new cl_float[in_height * 8];
 
-		clWaitForEvents(1, &wev0);
-		clWaitForEvents(1, &wev1);
+		if (xsup <= 0.5f) { xsup = 0.5f + 1e-12f; xsc = 1.0f; }
+		if (ysup <= 0.5f) { ysup = 0.5f + 1e-12f; ysc = 1.0f; }
 
+		for (int i = 0; i < out_width; ++i) {
+			float centre = (i+0.5f) / x_scale;
+			int start = (int)max(centre-xsup+0.5f, 0.0f);
+			int stop = (int)max(centre+xsup+0.5f, (float)in_width);
+			int nmax = stop - start;
+			float s = start - centre + 0.5f;
+			for (int n = 0; n < 8; ++n, ++s) {
+				xdata[i*8+n] = (cl_float)lanczos3(s * xsc);
+			}
+		}
+
+		for (int i = 0; i < out_height; ++i) {
+			float centre = (i+0.5f) / y_scale;
+			int start = (int)max(centre-ysup+0.5f, 0.0f);
+			int stop = (int)max(centre+ysup+0.5f, (float)in_height);
+			int nmax = stop - start;
+			float s = start - centre + 0.5f;
+			for (int n = 0; n < 8; ++n, ++s) {
+				ydata[i*8+n] = (cl_float)lanczos3(s * ysc);
+			}
+		}
+
+		cl_event pregen[2];
+		pregen[0] = filter_x.queueWrite(xdata);
+		pregen[1] = filter_y.queueWrite(ydata);
+		clWaitForEvents(2, pregen);
+		// PREGEN1 END
+/*
 		for (uint64_t i = 0; i < n_frames; ++i)
 		{
 			fprintf(stderr, "Scaling frame %lld\r", i);
@@ -283,6 +314,7 @@ kern.setArgumentImage(3, (plane).dev_d);
 			write(dest_fd, v.dest_p, out_chr_sz);
 
 		}
+*/
 		etime = _x_time();
 		ttl_time = (double)(etime-stime)/1000000ll;
 
@@ -312,4 +344,14 @@ plane.host_d.unmap();
 _X_TIMER_TEARDOWN
 
 	return 0;
+}
+
+#define LANC_EPSILON (1e-9f)
+
+float lanczos3(float x) {
+	float ax = fabs(x);
+
+	return (ax > 3) ? 0.0f :
+		((ax < LANC_EPSILON) ? 1.0f :
+			3.0f*sin(M_PI*x)*sin(M_PI*x/3.0f)/(M_PI*M_PI*x*x));
 }
