@@ -149,6 +149,7 @@ _X_TIMER_SETUP
 #define DEV_IMG(width,height) Image(env, MemoryType::ReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 #define DEV_RIMG(width,height) Image(env, MemoryType::ReadOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 #define DEV_WIMG(width,height) Image(env, MemoryType::WriteOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
+#define FILTER(size) Buffer<cl_float>(env, MemoryType::ReadWrite, size*8)
 
 #define LUM_PLANE(iw,ih,ow,oh) \
 HOST_IMG(iw, ih), \
@@ -175,10 +176,6 @@ DEV_WIMG(ow, oh)
 
 	try {
 
-		Buffer<cl_float>
-			filter_x(env, MemoryType::ReadWrite, in_width*8),
-			filter_y(env, MemoryType::ReadWrite, in_height*8);
-
 #define MAP_HPTRS(plane) \
 plane.host_s.map(MapMode::Write); \
 plane.host_d.map(MapMode::Read);
@@ -197,9 +194,8 @@ plane.dest_p = static_cast<uint8_t*>(plane.host_d.data());
 
 #define SET_FX_ARG(kern,plane) \
 kern.setArgument(0, x_scale); \
-kern.setArgumentBuffer(1, filter_x); \
-kern.setArgumentImage(2, (plane).dev_s); \
-kern.setArgumentImage(3, (plane).dev_x);
+kern.setArgumentImage(1, (plane).dev_s); \
+kern.setArgumentImage(2, (plane).dev_x);
 
 		SET_FX_ARG(fx_y, y);
 		SET_FX_ARG(fx_u, u);
@@ -207,9 +203,8 @@ kern.setArgumentImage(3, (plane).dev_x);
 
 #define SET_FY_ARG(kern,plane) \
 kern.setArgument(0, y_scale); \
-kern.setArgumentBuffer(1, filter_y); \
-kern.setArgumentImage(2, (plane).dev_x); \
-kern.setArgumentImage(3, (plane).dev_d);
+kern.setArgumentImage(1, (plane).dev_x); \
+kern.setArgumentImage(2, (plane).dev_d);
 
 		SET_FY_ARG(fy_y, y);
 		SET_FY_ARG(fy_u, u);
@@ -218,47 +213,6 @@ kern.setArgumentImage(3, (plane).dev_d);
 		stime = _x_time();
 		ssize_t rd_count;
 
-		// PREGEN1 START
-		float
-			xsc = min(x_scale, 1.0f),
-			ysc = min(y_scale, 1.0f),
-			xsup = 3.0f / xsc,
-			ysup = 3.0f / ysc;
-
-		cl_float* xdata = new cl_float[in_width * 8];
-		cl_float* ydata = new cl_float[in_height * 8];
-
-		if (xsup <= 0.5f) { xsup = 0.5f + 1e-12f; xsc = 1.0f; }
-		if (ysup <= 0.5f) { ysup = 0.5f + 1e-12f; ysc = 1.0f; }
-
-		for (int i = 0; i < out_width; ++i) {
-			float centre = (i+0.5f) / x_scale;
-			int start = (int)max(centre-xsup+0.5f, 0.0f);
-			int stop = (int)max(centre+xsup+0.5f, (float)in_width);
-			int nmax = stop - start;
-			float s = start - centre + 0.5f;
-			for (int n = 0; n < 8; ++n, ++s) {
-				xdata[i*8+n] = (cl_float)lanczos3(s * xsc);
-			}
-		}
-
-		for (int i = 0; i < out_height; ++i) {
-			float centre = (i+0.5f) / y_scale;
-			int start = (int)max(centre-ysup+0.5f, 0.0f);
-			int stop = (int)max(centre+ysup+0.5f, (float)in_height);
-			int nmax = stop - start;
-			float s = start - centre + 0.5f;
-			for (int n = 0; n < 8; ++n, ++s) {
-				ydata[i*8+n] = (cl_float)lanczos3(s * ysc);
-			}
-		}
-
-		cl_event pregen[2];
-		pregen[0] = filter_x.queueWrite(xdata);
-		pregen[1] = filter_y.queueWrite(ydata);
-		clWaitForEvents(2, pregen);
-		// PREGEN1 END
-/*
 		for (uint64_t i = 0; i < n_frames; ++i)
 		{
 			fprintf(stderr, "Scaling frame %lld\r", i);
@@ -314,7 +268,7 @@ kern.setArgumentImage(3, (plane).dev_d);
 			write(dest_fd, v.dest_p, out_chr_sz);
 
 		}
-*/
+
 		etime = _x_time();
 		ttl_time = (double)(etime-stime)/1000000ll;
 
