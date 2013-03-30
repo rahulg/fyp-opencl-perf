@@ -102,8 +102,8 @@ _X_TIMER_SETUP
 		out_chr_sz = (out_width/2) * (out_height/2);
 
 	cl_float
-		x_scale = (float)in_width / (float)out_width,
-		y_scale = (float)in_height / (float)out_height;
+		x_scale = (float)out_width / (float)in_width,
+		y_scale = (float)out_height / (float)in_height;
 
 	struct stat st_buf;
 	stat(input_name.c_str(), &st_buf);
@@ -240,9 +240,9 @@ kern.setArgumentImage(3, (plane).dev_d);
 			}
 
 			y.ewrite = y.dev_s.queueWrite(y.src_p);
-			y.efx = fx_y.run(out_width, in_height);
-			y.efy = fy_y.run(out_width, out_height);
-			y.eread = y.dev_d.queueRead(y.dest_p);
+			y.efx = fx_y.run(out_width, in_height, y.ewrite);
+			y.efy = fy_y.run(out_width, out_height, y.efx);
+			y.eread = y.dev_d.queueRead(y.dest_p, y.efy);
 
 			// Read U
 			rd_count = read(src_fd, u.src_p, in_chr_sz);
@@ -252,9 +252,9 @@ kern.setArgumentImage(3, (plane).dev_d);
 			}
 
 			u.ewrite = u.dev_s.queueWrite(u.src_p);
-			u.efx = fx_u.run(out_width/2, in_height/2);
-			u.efy = fy_u.run(out_width/2, out_height/2);
-			u.eread = u.dev_d.queueRead(u.dest_p);
+			u.efx = fx_u.run(out_width/2, in_height/2, u.ewrite);
+			u.efy = fy_u.run(out_width/2, out_height/2, u.efx);
+			u.eread = u.dev_d.queueRead(u.dest_p, u.efy);
 
 			// Read V
 			rd_count = read(src_fd, v.src_p, in_chr_sz);
@@ -264,9 +264,9 @@ kern.setArgumentImage(3, (plane).dev_d);
 			}
 
 			v.ewrite = v.dev_s.queueWrite(v.src_p);
-			v.efx = fx_v.run(out_width/2, in_height/2);
-			v.efy = fy_v.run(out_width/2, out_height/2);
-			v.eread = v.dev_d.queueRead(v.dest_p);
+			v.efx = fx_v.run(out_width/2, in_height/2, v.ewrite);
+			v.efy = fy_v.run(out_width/2, out_height/2, v.efx);
+			v.eread = v.dev_d.queueRead(v.dest_p, v.efy);
 
 			fprintf(stderr, "Scaling frame %lld\r", i+1);
 

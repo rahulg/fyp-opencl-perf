@@ -37,7 +37,7 @@ __kernel void filter_x(float x_scale, __global float* filter, __read_only image2
 		y = get_global_id(1);
 
 	float
-		in_x = x_scale * convert_float(x),
+		in_x,
 		in_y = convert_float(y);
 
 	int2 c = (int2)(x, y);
@@ -45,7 +45,8 @@ __kernel void filter_x(float x_scale, __global float* filter, __read_only image2
 	float4 sampled = (float4)(0,0,0,0);
 
 	for (int i = -3; i <= 3; ++i) {
-		sampled += filter[i+3] * convert_float4(read_imageui(img_in, sampler_lin, (float2)(in_x+i, in_y)));
+		in_x = convert_float(x+i) / x_scale;
+		sampled += filter[i+3] * convert_float4(read_imageui(img_in, sampler_lin, (float2)(in_x, in_y)));
 	}
 
 	write_imageui(img_out, c, convert_uint4(sampled));
@@ -60,14 +61,15 @@ __kernel void filter_y(float y_scale, __global float* filter, __read_only image2
 
 	float
 		in_x = convert_float(x),
-		in_y = y_scale * convert_float(y);
+		in_y;
 
 	int2 c = (int2)(x, y);
 
 	float4 sampled = (float4)(0,0,0,0);
 
 	for (int i = -3; i <= 3; ++i) {
-		sampled += filter[i+3] * convert_float4(read_imageui(img_in, sampler_lin, (float2)(in_x, in_y+i)));
+		in_y = convert_float(y+i) / y_scale;
+		sampled += filter[i+3] * convert_float4(read_imageui(img_in, sampler_lin, (float2)(in_x, in_y)));
 	}
 
 	write_imageui(img_out, c, convert_uint4(sampled));
