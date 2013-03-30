@@ -15,7 +15,7 @@ using namespace derpcl;
 using namespace std;
 
 typedef struct {
-	Image host_s, host_d, dev_s, dev_0, dev_1, dev_d;
+	Image host_s, host_d, dev_s, dev_x, dev_d;
 	uint8_t *src_p, *dest_p;
 	cl_event eread, escale, efx, efy, ewrite;
 } plane_t;
@@ -130,12 +130,10 @@ _X_TIMER_SETUP
 
 	Environment env(DeviceType::GPU);
 
-	Program filters(env, "6tapblur.cl", false);
+	Program filters(env, "lanczos3.cl", false);
 
 	Kernel
-		re_y(filters, "rescale"),
-		re_u(filters, "rescale"),
-		re_v(filters, "rescale"),
+		pregen(filters, "pregen"),
 		fx_y(filters, "filter_x"),
 		fx_u(filters, "filter_x"),
 		fx_v(filters, "filter_x"),
@@ -148,36 +146,38 @@ _X_TIMER_SETUP
 #define DEV_RIMG(width,height) Image(env, MemoryType::ReadOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 #define DEV_WIMG(width,height) Image(env, MemoryType::WriteOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 
+#define LUM_PLANE(iw,ih,ow,oh) \
+HOST_IMG(iw, ih), \
+HOST_IMG(ow, oh), \
+DEV_RIMG(iw, ih), \
+DEV_IMG(ow, ih), \
+DEV_WIMG(ow, oh)
+#define CHR_PLANE(iw,ih,ow,oh) LUM_PLANE(iw/2, ih/2, ow/2, oh/2)
+
 	plane_t
 	y = {
-		HOST_IMG(in_width, in_height),
-		HOST_IMG(out_width, out_height),
-		DEV_RIMG(in_width, in_height),
-		DEV_IMG(out_width, out_height),
-		DEV_IMG(out_width, out_height),
-		DEV_WIMG(out_width, out_height)
+		LUM_PLANE(in_width, in_height, out_width, out_height)
 	},
 	u = {
-		HOST_IMG(in_width/2, in_height/2),
-		HOST_IMG(out_width/2, out_height/2),
-		DEV_RIMG(in_width/2, in_height/2),
-		DEV_IMG(out_width/2, out_height/2),
-		DEV_IMG(out_width/2, out_height/2),
-		DEV_WIMG(out_width/2, out_height/2)
+		CHR_PLANE(in_width, in_height, out_width, out_height)
 	},
 	v = {
-		HOST_IMG(in_width/2, in_height/2),
-		HOST_IMG(out_width/2, out_height/2),
-		DEV_RIMG(in_width/2, in_height/2),
-		DEV_IMG(out_width/2, out_height/2),
-		DEV_IMG(out_width/2, out_height/2),
-		DEV_WIMG(out_width/2, out_height/2)
+		CHR_PLANE(in_width, in_height, out_width, out_height)
 	};
+
+	Buffer<cl_float>
+		filter_x(env, MemoryType::ReadWrite, 7),
+		filter_y(env, MemoryType::ReadWrite, 7);
 
 	double ttl_time = 0.0;
 	uint64_t stime, etime;
 
 	try {
+
+		pregen.setArgument(0, x_scale);
+		pregen.setArgument(1, y_scale);
+		pregen.setArgumentBuffer(2, filter_x);
+		pregen.setArgumentBuffer(3, filter_y);
 
 #define MAP_HPTRS(plane) \
 plane.host_s.map(MapMode::Write); \
@@ -195,32 +195,21 @@ plane.dest_p = static_cast<uint8_t*>(plane.host_d.data());
 		SET_HPTRS(u);
 		SET_HPTRS(v);
 
-#define SET_SCALE(kern) \
-kern.setArgument(0, x_scale); \
-kern.setArgument(1, y_scale);
-
-		SET_SCALE(re_y);
-		SET_SCALE(re_u);
-		SET_SCALE(re_v);
-
-#define SET_RESCALE_ARG(kern,plane) \
-kern.setArgumentImage(2, (plane).dev_s); \
-kern.setArgumentImage(3, (plane).dev_0);
-		SET_RESCALE_ARG(re_y, y);
-		SET_RESCALE_ARG(re_u, u);
-		SET_RESCALE_ARG(re_v, v);
-
 #define SET_FX_ARG(kern,plane) \
-kern.setArgumentImage(0, (plane).dev_0); \
-kern.setArgumentImage(1, (plane).dev_1);
+kern.setArgument(0, x_scale); \
+kern.setArgumentBuffer(1, filter_x); \
+kern.setArgumentImage(2, (plane).dev_s); \
+kern.setArgumentImage(3, (plane).dev_x);
 
 		SET_FX_ARG(fx_y, y);
 		SET_FX_ARG(fx_u, u);
 		SET_FX_ARG(fx_v, v);
 
 #define SET_FY_ARG(kern,plane) \
-kern.setArgumentImage(0, (plane).dev_1); \
-kern.setArgumentImage(1, (plane).dev_d);
+kern.setArgument(0, y_scale); \
+kern.setArgumentBuffer(1, filter_y); \
+kern.setArgumentImage(2, (plane).dev_x); \
+kern.setArgumentImage(3, (plane).dev_d);
 
 		SET_FY_ARG(fy_y, y);
 		SET_FY_ARG(fy_u, u);
@@ -228,6 +217,16 @@ kern.setArgumentImage(1, (plane).dev_d);
 
 		stime = _x_time();
 		ssize_t rd_count;
+
+		cl_event egen = pregen.run(1);
+		clWaitForEvents(1, &egen);
+
+		cl_float xxx[7], yyy[7];
+		cl_event wev0 = filter_x.queueRead(xxx);
+		cl_event wev1 = filter_y.queueRead(yyy);
+
+		clWaitForEvents(1, &wev0);
+		clWaitForEvents(1, &wev1);
 
 		for (uint64_t i = 0; i < n_frames; ++i)
 		{
@@ -241,12 +240,11 @@ kern.setArgumentImage(1, (plane).dev_d);
 			}
 
 			y.ewrite = y.dev_s.queueWrite(y.src_p);
-			y.escale = re_y.run(out_width, out_height);
-			y.efx = fx_y.run(out_width, out_height);
+			y.efx = fx_y.run(out_width, in_height);
 			y.efy = fy_y.run(out_width, out_height);
 			y.eread = y.dev_d.queueRead(y.dest_p);
 
-			// Read Y
+			// Read U
 			rd_count = read(src_fd, u.src_p, in_chr_sz);
 			if (rd_count != in_chr_sz)
 			{
@@ -254,12 +252,11 @@ kern.setArgumentImage(1, (plane).dev_d);
 			}
 
 			u.ewrite = u.dev_s.queueWrite(u.src_p);
-			u.escale = re_u.run(out_width/2, out_height/2);
-			u.efx = fx_u.run(out_width/2, out_height/2);
+			u.efx = fx_u.run(out_width/2, in_height/2);
 			u.efy = fy_u.run(out_width/2, out_height/2);
 			u.eread = u.dev_d.queueRead(u.dest_p);
 
-			// Read Y
+			// Read V
 			rd_count = read(src_fd, v.src_p, in_chr_sz);
 			if (rd_count != in_chr_sz)
 			{
@@ -267,8 +264,7 @@ kern.setArgumentImage(1, (plane).dev_d);
 			}
 
 			v.ewrite = v.dev_s.queueWrite(v.src_p);
-			v.escale = re_v.run(out_width/2, out_height/2);
-			v.efx = fx_v.run(out_width/2, out_height/2);
+			v.efx = fx_v.run(out_width/2, in_height/2);
 			v.efy = fy_v.run(out_width/2, out_height/2);
 			v.eread = v.dev_d.queueRead(v.dest_p);
 
