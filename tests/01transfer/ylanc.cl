@@ -13,10 +13,10 @@ __kernel void filter(float scale, int height, __global float* filter, __read_onl
 
 	float4 sampled = (float4)(0.0f,0.0f,0.0f,0.0f);
 
-	for (int i = left; i <= right; ++i, ++n) {
+	for (int i = 0; i < FILTW; ++i, ++n) {
 		lanc = filter[y*FILTW+n];
 		density += lanc;
-		sampled += lanc * convert_float4(read_imageui(img_in, sampler_lin, (int2)(x, i)));
+		sampled += lanc * convert_float4(read_imageui(img_in, sampler_lin, (int2)(x, left+i)));
 	}
 
 	sampled /= density;
