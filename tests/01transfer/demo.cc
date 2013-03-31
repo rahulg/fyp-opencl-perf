@@ -25,8 +25,6 @@ typedef struct {
 	cl_event eread, escale, efx, efy, ewrite;
 } plane_t;
 
-float lanczos3(float x);
-
 int main(int argc, char const *argv[])
 {
 
@@ -55,7 +53,7 @@ _X_TIMER_SETUP
 	if (src_fd == -1)
 	{
 		perror("Source file error");
-		throw exception();
+		return 1;
 	}
 
 	if (output_name == "-")
@@ -69,7 +67,7 @@ _X_TIMER_SETUP
 		if (dest_fd == -1)
 		{
 			perror("Destination file error");
-			throw exception();
+			return 1;
 		}
 		dest_m.open(output_name + ".meta", ios::out | ios::trunc);
 	}
@@ -122,6 +120,8 @@ _X_TIMER_SETUP
 		dest_m << flag_width << out_width << endl;
 		dest_m << flag_height << out_height << endl;
 	}
+	source_m.close();
+	dest_m.close();
 
 	cerr << "[i] width: " << in_width << endl
 	     << "[i] height: " << in_height << endl
@@ -135,260 +135,322 @@ _X_TIMER_SETUP
 	     << "[o] lum_sz: " << out_lum_sz
 	     << " | chr_sz: " << out_chr_sz << endl;
 
-	Environment env(DeviceType::GPU);
-
-	Program filters(env, "lanczos3.cl", false);
-
-	Kernel
-		xlcache(filters, "buildcache"),
-		xccache(filters, "buildcache"),
-		ylcache(filters, "buildcache"),
-		yccache(filters, "buildcache"),
-		fx_y(filters, "filter_x"),
-		fx_u(filters, "filter_x"),
-		fx_v(filters, "filter_x"),
-		fy_y(filters, "filter_y"),
-		fy_u(filters, "filter_y"),
-		fy_v(filters, "filter_y");
-
-	// PRECOMPUTE
-	int xfw, yfw;
-	{
-		int midpt, left, right;
-
-		midpt = out_width/2;
-		left = (int)floorf((float)(midpt-2) / x_scale);
-		right = (int)ceilf((float)(midpt+3) / x_scale);
-
-		xfw = right-left+1;
-		xfw = xfw < 6 ? 6 : xfw;
-
-		midpt = out_height/2;
-		left = (int)floorf((float)(midpt-2) / y_scale);
-		right = (int)ceilf((float)(midpt+3) / y_scale);
-
-		yfw = right-left+1;
-		yfw = yfw < 6 ? 6 : yfw;
-	}
-	cerr << "[-] x-filter-width: " << xfw << endl
-	     << "[-] y-filter-width: " << yfw << endl;
-
-	Buffer<cl_float>
-		xlf(env, MemoryType::ReadWrite, xfw * out_width),
-		xcf(env, MemoryType::ReadWrite, xfw * ((out_width / 2)+1)),
-		ylf(env, MemoryType::ReadWrite, yfw * out_height),
-		ycf(env, MemoryType::ReadWrite, yfw * ((out_height / 2)+1));
-
 	try {
-		cl_event rev[4];
+		Environment env(DeviceType::GPU);
 
-		xlcache.setArgument(0, x_scale);
-		xlcache.setArgumentBuffer(1, xlf);
-		rev[0] = xlcache.run(out_width);
-
-		ylcache.setArgument(0, y_scale);
-		ylcache.setArgumentBuffer(1, ylf);
-		rev[1] = ylcache.run(out_height);
-
-		xccache.setArgument(0, x_scale);
-		xccache.setArgumentBuffer(1, xcf);
-		rev[2] = xccache.run(out_width/2);
-
-		yccache.setArgument(0, y_scale);
-		yccache.setArgumentBuffer(1, ycf);
-		rev[3] = yccache.run(out_height/2);
-
-		clWaitForEvents(4, rev);
-
-	} catch (string s) {
-		cerr << s << endl;
-	}
-
-
-#define HOST_IMG(width,height) Image(env, MemoryType::PinnedReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
-#define DEV_IMG(width,height) Image(env, MemoryType::ReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
-#define DEV_RIMG(width,height) Image(env, MemoryType::ReadOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
-#define DEV_WIMG(width,height) Image(env, MemoryType::WriteOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
-
-#define LUM_PLANE(iw,ih,ow,oh) \
-HOST_IMG(iw, ih), \
-HOST_IMG(ow, oh), \
-DEV_RIMG(iw, ih), \
-DEV_IMG(ow, ih), \
-DEV_WIMG(ow, oh)
-#define CHR_PLANE(iw,ih,ow,oh) LUM_PLANE(iw/2, ih/2, ow/2, oh/2)
-
-	plane_t
-	y = {
-		LUM_PLANE(in_width, in_height, out_width, out_height)
-	},
-	u = {
-		CHR_PLANE(in_width, in_height, out_width, out_height)
-	},
-	v = {
-		CHR_PLANE(in_width, in_height, out_width, out_height)
-	};
-
-
-	double ttl_time = 0.0;
-	uint64_t stime, etime;
-
-	try {
-
-#define MAP_HPTRS(plane) \
-plane.host_s.map(MapMode::Write); \
-plane.host_d.map(MapMode::Read);
-
-		MAP_HPTRS(y);
-		MAP_HPTRS(u);
-		MAP_HPTRS(v);
-
-#define SET_HPTRS(plane) \
-plane.src_p = static_cast<uint8_t*>(plane.host_s.data()); \
-plane.dest_p = static_cast<uint8_t*>(plane.host_d.data());
-
-		SET_HPTRS(y);
-		SET_HPTRS(u);
-		SET_HPTRS(v);
-
-#define SET_LFX_ARG(kern,plane) \
-kern.setArgument(0, x_scale); \
-kern.setArgumentBuffer(1, xlf); \
-kern.setArgumentImage(2, (plane).dev_s); \
-kern.setArgumentImage(3, (plane).dev_x);
-#define SET_CFX_ARG(kern,plane) \
-kern.setArgument(0, x_scale); \
-kern.setArgumentBuffer(1, xcf); \
-kern.setArgumentImage(2, (plane).dev_s); \
-kern.setArgumentImage(3, (plane).dev_x);
-
-		SET_LFX_ARG(fx_y, y);
-		SET_CFX_ARG(fx_u, u);
-		SET_CFX_ARG(fx_v, v);
-
-#define SET_LFY_ARG(kern,plane) \
-kern.setArgument(0, y_scale); \
-kern.setArgumentBuffer(1, ylf); \
-kern.setArgumentImage(2, (plane).dev_x); \
-kern.setArgumentImage(3, (plane).dev_d);
-#define SET_CFY_ARG(kern,plane) \
-kern.setArgument(0, y_scale); \
-kern.setArgumentBuffer(1, ycf); \
-kern.setArgumentImage(2, (plane).dev_x); \
-kern.setArgumentImage(3, (plane).dev_d);
-
-		SET_LFY_ARG(fy_y, y);
-		SET_CFY_ARG(fy_u, u);
-		SET_CFY_ARG(fy_v, v);
-
-		stime = _x_time();
-		ssize_t rd_count;
-
-		for (uint64_t i = 0; i < n_frames; ++i)
+		// PRECOMPUTE
+		uint32_t xfw, yfw;
 		{
-			fprintf(stderr, "Scaling frame %lld\r", i);
+			int midpt, left, right;
 
-			// Read Y
-			rd_count = read(src_fd, y.src_p, in_lum_sz);
-			if (rd_count != in_lum_sz)
-			{
-				cerr << "[Y] Read failed" << endl;
-			}
+			midpt = out_width/2;
+			left = (int)floorf((float)(midpt-2) / x_scale);
+			right = (int)ceilf((float)(midpt+3) / x_scale);
 
-			y.ewrite = y.dev_s.queueWrite(y.src_p);
-			y.efx = fx_y.run(out_width, in_height, y.ewrite);
-			y.efy = fy_y.run(out_width, out_height, y.efx);
-#if SIM_GLDISP == 0
-			y.eread = y.dev_d.queueRead(y.dest_p, y.efy);
-#endif
+			xfw = right-left+1;
+			xfw = xfw < 6 ? 6 : xfw;
 
-			// Read U
-			rd_count = read(src_fd, u.src_p, in_chr_sz);
-			if (rd_count != in_chr_sz)
-			{
-				cerr << "[U] Read failed" << endl;
-			}
+			midpt = out_height/2;
+			left = (int)floorf((float)(midpt-2) / y_scale);
+			right = (int)ceilf((float)(midpt+3) / y_scale);
 
-			u.ewrite = u.dev_s.queueWrite(u.src_p);
-			u.efx = fx_u.run(out_width/2, in_height/2, u.ewrite);
-			u.efy = fy_u.run(out_width/2, out_height/2, u.efx);
-#if SIM_GLDISP == 0
-			u.eread = u.dev_d.queueRead(u.dest_p, u.efy);
-#endif
+			yfw = right-left+1;
+		}
+		cerr << "[-] x-filter-width: " << xfw << endl
+		     << "[-] y-filter-width: " << yfw << endl;
 
-			// Read V
-			rd_count = read(src_fd, v.src_p, in_chr_sz);
-			if (rd_count != in_chr_sz)
-			{
-				cerr << "[V] Read failed" << endl;
-			}
+		char xopts[64], yopts[64];
 
-			v.ewrite = v.dev_s.queueWrite(v.src_p);
-			v.efx = fx_v.run(out_width/2, in_height/2, v.ewrite);
-			v.efy = fy_v.run(out_width/2, out_height/2, v.efx);
-#if SIM_GLDISP == 0
-			v.eread = v.dev_d.queueRead(v.dest_p, v.efy);
-#endif
+		sprintf(xopts, "-DFILTW=%d", xfw);
+		sprintf(yopts, "-DFILTW=%d", yfw);
 
-			fprintf(stderr, "Scaling frame %lld\r", i+1);
+		Program	pregen(env, "pregen.cl");
+		Program xlanc(env, "xlanc.cl", xopts);
+		Program ylanc(env, "ylanc.cl", yopts);
+		
+		Kernel cache(pregen, "cache");
+		Kernel cache2(pregen, "cache2");
+		Kernel fx_y(xlanc, "filter");
+		Kernel fx_u(xlanc, "filter");
+		Kernel fx_v(xlanc, "filter");
+		Kernel fy_y(ylanc, "filter");
+		Kernel fy_u(ylanc, "filter");
+		Kernel fy_v(ylanc, "filter");
 
-#if SIM_GLDISP == 1
-			// Write Y
-			clWaitForEvents(1, &y.efx);
-			// Write U
-			clWaitForEvents(1, &u.efx);
-			// Write V
-			clWaitForEvents(1, &v.efx);
-#else
-			// Write Y
-			clWaitForEvents(1, &y.eread);
-			write(dest_fd, y.dest_p, out_lum_sz);
-			// Write U
-			clWaitForEvents(1, &u.eread);
-			write(dest_fd, u.dest_p, out_chr_sz);
-			// Write V
-			clWaitForEvents(1, &v.eread);
-			write(dest_fd, v.dest_p, out_chr_sz);
-#endif
+		Buffer<cl_float>
+			xlf(env, MemoryType::ReadWrite, xfw * (out_width+5)),
+			xcf(env, MemoryType::ReadWrite, xfw * ((out_width / 2)+5)),
+			ylf(env, MemoryType::ReadWrite, yfw * (out_height+5)),
+			ycf(env, MemoryType::ReadWrite, yfw * ((out_height / 2)+5));
+
+		try {
+			cl_event rev;
+
+			cache.setArgument(0, x_scale);
+			cache.setArgumentBuffer(1, xlf);
+			rev = cache.run(out_width);
+			clWaitForEvents(1, &rev);
+
+			cache2.setArgument(0, x_scale);
+			cache2.setArgumentBuffer(1, xcf);
+			rev = cache2.run(out_width/2);
+			clWaitForEvents(1, &rev);
+
+			cache.setArgument(0, y_scale);
+			cache.setArgumentBuffer(1, ylf);
+			rev = cache.run(out_height);
+			clWaitForEvents(1, &rev);
+
+			cache2.setArgument(0, y_scale);
+			cache2.setArgumentBuffer(1, ycf);
+			rev = cache2.run(out_height/2);
+			clWaitForEvents(1, &rev);
+
+		} catch (string s) {
+			cerr << s << endl;
 		}
 
-		etime = _x_time();
-		ttl_time = (double)(etime-stime)/1000000ll;
 
-		cerr << "[-] Time: " <<  ttl_time << " ms" << endl;
-		cerr << "[-] Time per frame: " <<  ttl_time / n_frames << " ms" << endl;
-		cerr << "[-] FPS: " <<  n_frames * 1000 / ttl_time << endl;
+	#define HOST_IMG(width,height) Image(env, MemoryType::PinnedReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
+	#define DEV_IMG(width,height) Image(env, MemoryType::ReadWrite, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
+	#define DEV_RIMG(width,height) Image(env, MemoryType::ReadOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
+	#define DEV_WIMG(width,height) Image(env, MemoryType::WriteOnly, Channels::Single, PixelFormat::Unsigned8, {(width), (height)})
 
-#define UNMAP_HPTRS(plane) \
-plane.host_s.unmap(); \
-plane.host_d.unmap();
+	#define LUM_PLANE(iw,ih,ow,oh) \
+	HOST_IMG(iw, ih), \
+	HOST_IMG(ow, oh), \
+	DEV_RIMG(iw, ih), \
+	DEV_IMG(ow, ih), \
+	DEV_WIMG(ow, oh)
+	#define CHR_PLANE(iw,ih,ow,oh) LUM_PLANE(iw/2, ih/2, ow/2, oh/2)
 
-		UNMAP_HPTRS(y);
-		UNMAP_HPTRS(u);
-		UNMAP_HPTRS(v);
+		plane_t
+		y = {
+			LUM_PLANE(in_width, in_height, out_width, out_height)
+		},
+		u = {
+			CHR_PLANE(in_width, in_height, out_width, out_height)
+		},
+		v = {
+			CHR_PLANE(in_width, in_height, out_width, out_height)
+		};
 
-		close(src_fd);
-		if (!pipe_out)
-		{
-			close(dest_fd);
+
+		double ttl_time = 0.0;
+		uint64_t stime, etime;
+
+		try {
+
+	#define MAP_HPTRS(plane) \
+	plane.host_s.map(MapMode::Write); \
+	plane.host_d.map(MapMode::Read);
+
+			MAP_HPTRS(y);
+			MAP_HPTRS(u);
+			MAP_HPTRS(v);
+
+	#define SET_HPTRS(plane) \
+	plane.src_p = static_cast<uint8_t*>(plane.host_s.data()); \
+	plane.dest_p = static_cast<uint8_t*>(plane.host_d.data());
+
+			SET_HPTRS(y);
+			SET_HPTRS(u);
+			SET_HPTRS(v);
+
+	#define SET_LFX_ARG(kern,plane) \
+	kern.setArgument(0, x_scale); \
+	kern.setArgument(1, in_height); \
+	kern.setArgumentBuffer(2, xlf); \
+	kern.setArgumentImage(3, (plane).dev_s); \
+	kern.setArgumentImage(4, (plane).dev_x);
+	#define SET_CFX_ARG(kern,plane) \
+	kern.setArgument(0, x_scale); \
+	kern.setArgument(1, in_height/2); \
+	kern.setArgumentBuffer(2, xcf); \
+	kern.setArgumentImage(3, (plane).dev_s); \
+	kern.setArgumentImage(4, (plane).dev_x);
+
+			SET_LFX_ARG(fx_y, y);
+			SET_CFX_ARG(fx_u, u);
+			SET_CFX_ARG(fx_v, v);
+
+	#define SET_LFY_ARG(kern,plane) \
+	kern.setArgument(0, y_scale); \
+	kern.setArgument(1, out_width); \
+	kern.setArgumentBuffer(2, ylf); \
+	kern.setArgumentImage(3, (plane).dev_x); \
+	kern.setArgumentImage(4, (plane).dev_d);
+	#define SET_CFY_ARG(kern,plane) \
+	kern.setArgument(0, y_scale); \
+	kern.setArgument(1, out_width/2); \
+	kern.setArgumentBuffer(2, ycf); \
+	kern.setArgumentImage(3, (plane).dev_x); \
+	kern.setArgumentImage(4, (plane).dev_d);
+
+			SET_LFY_ARG(fy_y, y);
+			SET_CFY_ARG(fy_u, u);
+			SET_CFY_ARG(fy_v, v);
+
+			ssize_t rd_count;
+
+			/******** WARMUP ********/
+			uint64_t warm_frames = n_frames < 60 ? n_frames : 60;
+			int null_fd = open("/dev/null", O_WRONLY);
+			for (uint64_t i = 0; i < warm_frames; ++i)
+			{
+				fprintf(stderr, "Warmup frame %lld\r", i);
+
+				// Read Y
+				rd_count = read(src_fd, y.src_p, in_lum_sz);
+				if (rd_count != in_lum_sz)
+				{
+					cerr << "[Y] Read failed" << endl;
+				}
+
+				y.ewrite = y.dev_s.queueWrite(y.src_p);
+				y.efx = fx_y.run(out_width, in_height, y.ewrite);
+				y.efy = fy_y.run(out_width, out_height, y.efx);
+				y.eread = y.dev_d.queueRead(y.dest_p, y.efy);
+
+				// Read U
+				rd_count = read(src_fd, u.src_p, in_chr_sz);
+				if (rd_count != in_chr_sz)
+				{
+					cerr << "[U] Read failed" << endl;
+				}
+
+				u.ewrite = u.dev_s.queueWrite(u.src_p);
+				u.efx = fx_u.run(out_width/2, in_height/2, u.ewrite);
+				u.efy = fy_u.run(out_width/2, out_height/2, u.efx);
+				u.eread = u.dev_d.queueRead(u.dest_p, u.efy);
+
+				// Read V
+				rd_count = read(src_fd, v.src_p, in_chr_sz);
+				if (rd_count != in_chr_sz)
+				{
+					cerr << "[V] Read failed" << endl;
+				}
+
+				v.ewrite = v.dev_s.queueWrite(v.src_p);
+				v.efx = fx_v.run(out_width/2, in_height/2, v.ewrite);
+				v.efy = fy_v.run(out_width/2, out_height/2, v.efx);
+				v.eread = v.dev_d.queueRead(v.dest_p, v.efy);
+
+				// Write Y
+				clWaitForEvents(1, &y.eread);
+				write(null_fd, y.dest_p, out_lum_sz);
+				// Write U
+				clWaitForEvents(1, &u.eread);
+				write(null_fd, u.dest_p, out_chr_sz);
+				// Write V
+				clWaitForEvents(1, &v.eread);
+				write(null_fd, v.dest_p, out_chr_sz);
+
+			}
+			lseek(src_fd, 0, SEEK_SET);
+			close(null_fd);
+			/******** END WARMUP ********/
+
+			stime = _x_time();
+
+			for (uint64_t i = 0; i < n_frames; ++i)
+			{
+				fprintf(stderr, "Scaling frame %lld\r", i);
+
+				// Read Y
+				rd_count = read(src_fd, y.src_p, in_lum_sz);
+				if (rd_count != in_lum_sz)
+				{
+					cerr << "[Y] Read failed" << endl;
+				}
+
+				y.ewrite = y.dev_s.queueWrite(y.src_p);
+				y.efx = fx_y.run(out_width, in_height, y.ewrite);
+				y.efy = fy_y.run(out_width, out_height, y.efx);
+	#if SIM_GLDISP == 0
+				y.eread = y.dev_d.queueRead(y.dest_p, y.efy);
+	#endif
+
+				// Read U
+				rd_count = read(src_fd, u.src_p, in_chr_sz);
+				if (rd_count != in_chr_sz)
+				{
+					cerr << "[U] Read failed" << endl;
+				}
+
+				u.ewrite = u.dev_s.queueWrite(u.src_p);
+				u.efx = fx_u.run(out_width/2, in_height/2, u.ewrite);
+				u.efy = fy_u.run(out_width/2, out_height/2, u.efx);
+	#if SIM_GLDISP == 0
+				u.eread = u.dev_d.queueRead(u.dest_p, u.efy);
+	#endif
+
+				// Read V
+				rd_count = read(src_fd, v.src_p, in_chr_sz);
+				if (rd_count != in_chr_sz)
+				{
+					cerr << "[V] Read failed" << endl;
+				}
+
+				v.ewrite = v.dev_s.queueWrite(v.src_p);
+				v.efx = fx_v.run(out_width/2, in_height/2, v.ewrite);
+				v.efy = fy_v.run(out_width/2, out_height/2, v.efx);
+	#if SIM_GLDISP == 0
+				v.eread = v.dev_d.queueRead(v.dest_p, v.efy);
+	#endif
+
+	#if SIM_GLDISP == 1
+				// Write Y
+				clWaitForEvents(1, &y.efx);
+				// Write U
+				clWaitForEvents(1, &u.efx);
+				// Write V
+				clWaitForEvents(1, &v.efx);
+	#else
+				// Write Y
+				clWaitForEvents(1, &y.eread);
+				write(dest_fd, y.dest_p, out_lum_sz);
+				// Write U
+				clWaitForEvents(1, &u.eread);
+				write(dest_fd, u.dest_p, out_chr_sz);
+				// Write V
+				clWaitForEvents(1, &v.eread);
+				write(dest_fd, v.dest_p, out_chr_sz);
+	#endif
+			}
+
+			etime = _x_time();
+			ttl_time = (double)(etime-stime)/1000000ll;
+
+			cerr << "[-] Time: " <<  ttl_time << " ms" << endl;
+			cerr << "[-] Time per frame: " <<  ttl_time / n_frames << " ms" << endl;
+			cerr << "[-] FPS: " <<  n_frames * 1000 / ttl_time << endl;
+
+	#define UNMAP_HPTRS(plane) \
+	plane.host_s.unmap(); \
+	plane.host_d.unmap();
+
+			UNMAP_HPTRS(y);
+			UNMAP_HPTRS(u);
+			UNMAP_HPTRS(v);
+
+			close(src_fd);
+			if (!pipe_out)
+			{
+				close(dest_fd);
+			}
+		} catch (string s) {
+			cerr << s << endl;
+_X_TIMER_TEARDOWN
+			return 1;
 		}
-		source_m.close();
-		dest_m.close();
 	} catch (string s) {
 		cerr << s << endl;
+_X_TIMER_TEARDOWN
+		return 1;
 	}
 
 _X_TIMER_TEARDOWN
 
 	return 0;
-}
-
-#define LANC_EPSILON (1e-9f)
-
-float lanczos3(float x) {
-	float ax = fabs(x);
-
-	return (ax > 3) ? 0.0f :
-		((ax < LANC_EPSILON) ? 1.0f :
-			3.0f*sin(M_PI*x)*sin(M_PI*x/3.0f)/(M_PI*M_PI*x*x));
 }
