@@ -14,8 +14,6 @@
 #include "derpcl/cl.h"
 #include "timing.h"
 
-#define SIM_GLDISP 0
-
 using namespace derpcl;
 using namespace std;
 
@@ -235,10 +233,6 @@ _X_TIMER_SETUP
 			CHR_PLANE(in_width, in_height, out_width, out_height)
 		};
 
-
-		double ttl_time = 0.0;
-		uint64_t stime, etime;
-
 		try {
 
 	#define MAP_HPTRS(plane) \
@@ -351,6 +345,9 @@ _X_TIMER_SETUP
 			close(null_fd);
 			/******** END WARMUP ********/
 
+			double ttl_time = 0.0, iottl = 0.0, txttl = 0.0;
+			uint64_t stime, etime, iost, ioend;
+			cl_ulong start, end;
 			stime = _x_time();
 
 			for (uint64_t i = 0; i < n_frames; ++i)
@@ -358,7 +355,10 @@ _X_TIMER_SETUP
 				fprintf(stderr, "Scaling frame %lld\r", i);
 
 				// Read Y
+				iost = _x_time();
 				rd_count = read(src_fd, y.src_p, in_lum_sz);
+				ioend = _x_time();
+				iottl += (double)(ioend-iost)/1000000ll;
 				if (rd_count != in_lum_sz)
 				{
 					cerr << "[Y] Read failed" << endl;
@@ -367,12 +367,13 @@ _X_TIMER_SETUP
 				y.ewrite = y.dev_s.queueWrite(y.src_p);
 				y.efx = fx_y.run(out_width, in_height, y.ewrite);
 				y.efy = fy_y.run(out_width, out_height, y.efx);
-	#if SIM_GLDISP == 0
 				y.eread = y.dev_d.queueRead(y.dest_p, y.efy);
-	#endif
 
 				// Read U
+				iost = _x_time();
 				rd_count = read(src_fd, u.src_p, in_chr_sz);
+				ioend = _x_time();
+				iottl += (double)(ioend-iost)/1000000ll;
 				if (rd_count != in_chr_sz)
 				{
 					cerr << "[U] Read failed" << endl;
@@ -381,12 +382,13 @@ _X_TIMER_SETUP
 				u.ewrite = u.dev_s.queueWrite(u.src_p);
 				u.efx = fx_u.run(out_width/2, in_height/2, u.ewrite);
 				u.efy = fy_u.run(out_width/2, out_height/2, u.efx);
-	#if SIM_GLDISP == 0
 				u.eread = u.dev_d.queueRead(u.dest_p, u.efy);
-	#endif
 
 				// Read V
+				iost = _x_time();
 				rd_count = read(src_fd, v.src_p, in_chr_sz);
+				ioend = _x_time();
+				iottl += (double)(ioend-iost)/1000000ll;
 				if (rd_count != in_chr_sz)
 				{
 					cerr << "[V] Read failed" << endl;
@@ -395,28 +397,45 @@ _X_TIMER_SETUP
 				v.ewrite = v.dev_s.queueWrite(v.src_p);
 				v.efx = fx_v.run(out_width/2, in_height/2, v.ewrite);
 				v.efy = fy_v.run(out_width/2, out_height/2, v.efx);
-	#if SIM_GLDISP == 0
 				v.eread = v.dev_d.queueRead(v.dest_p, v.efy);
-	#endif
 
-	#if SIM_GLDISP == 1
-				// Write Y
-				clWaitForEvents(1, &y.efx);
-				// Write U
-				clWaitForEvents(1, &u.efx);
-				// Write V
-				clWaitForEvents(1, &v.efx);
-	#else
 				// Write Y
 				clWaitForEvents(1, &y.eread);
+				iost = _x_time();
 				write(dest_fd, y.dest_p, out_lum_sz);
+				ioend = _x_time();
+				iottl += (double)(ioend-iost)/1000000ll;
 				// Write U
 				clWaitForEvents(1, &u.eread);
+				iost = _x_time();
 				write(dest_fd, u.dest_p, out_chr_sz);
+				ioend = _x_time();
+				iottl += (double)(ioend-iost)/1000000ll;
 				// Write V
 				clWaitForEvents(1, &v.eread);
+				iost = _x_time();
 				write(dest_fd, v.dest_p, out_chr_sz);
-	#endif
+				ioend = _x_time();
+				iottl += (double)(ioend-iost)/1000000ll;
+
+				clGetEventProfilingInfo(y.ewrite, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start, NULL);
+				clGetEventProfilingInfo(y.ewrite, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end, NULL);
+				txttl += (double)(end - start)*(double)(1e-06);
+				clGetEventProfilingInfo(u.ewrite, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start, NULL);
+				clGetEventProfilingInfo(u.ewrite, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end, NULL);
+				txttl += (double)(end - start)*(double)(1e-06);
+				clGetEventProfilingInfo(v.ewrite, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start, NULL);
+				clGetEventProfilingInfo(v.ewrite, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end, NULL);
+				txttl += (double)(end - start)*(double)(1e-06);
+				clGetEventProfilingInfo(y.eread, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start, NULL);
+				clGetEventProfilingInfo(y.eread, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end, NULL);
+				txttl += (double)(end - start)*(double)(1e-06);
+				clGetEventProfilingInfo(u.eread, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start, NULL);
+				clGetEventProfilingInfo(u.eread, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end, NULL);
+				txttl += (double)(end - start)*(double)(1e-06);
+				clGetEventProfilingInfo(v.eread, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start, NULL);
+				clGetEventProfilingInfo(v.eread, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end, NULL);
+				txttl += (double)(end - start)*(double)(1e-06);
 			}
 
 			etime = _x_time();
@@ -424,7 +443,14 @@ _X_TIMER_SETUP
 
 			cerr << "[-] Time: " <<  ttl_time << " ms" << endl;
 			cerr << "[-] Time per frame: " <<  ttl_time / n_frames << " ms" << endl;
+			cerr << "[-] Transfer time: " << txttl << " ms" << endl;
+			cerr << "[-] Transfer time per frame: " << txttl / n_frames << " ms" << endl;
+			cerr << "[-] % transfer: " << (txttl / ttl_time) * 100.0 << endl;
+			cerr << "[-] IO time: " << iottl << " ms" << endl;
+			cerr << "[-] IO time per frame: " << iottl / n_frames << " ms" << endl;
+			cerr << "[-] % IO: " << (iottl / ttl_time) * 100.0 << endl;
 			cerr << "[-] FPS: " <<  n_frames * 1000 / ttl_time << endl;
+			cerr << "[-] IO-free FPS: " <<  n_frames * 1000 / (ttl_time-iottl) << endl;
 
 	#define UNMAP_HPTRS(plane) \
 	plane.host_s.unmap(); \
