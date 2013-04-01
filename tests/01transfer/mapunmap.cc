@@ -92,7 +92,7 @@ _X_TIMER_SETUP
 		{
 			fprintf(stderr, "\rITER %d", i);
 			cl_event mape0, unmape0, rune, mape1, unmape1;
-			dev0 = static_cast<cl_float*>(clEnqueueMapBuffer(env.queue(), data0.block(), CL_TRUE, CL_MAP_WRITE, 0, data0.size(), 0, NULL, &mape0, &err));
+			dev0 = static_cast<cl_float*>(clEnqueueMapBuffer(env.txQueue(), data0.block(), CL_TRUE, CL_MAP_WRITE, 0, data0.size(), 0, NULL, &mape0, &err));
 			for (int i = 0; i < bufsz; ++i) {
 				dev0[i] = host0[i];
 			}
@@ -100,7 +100,7 @@ _X_TIMER_SETUP
 			clWaitForEvents(1, &unmape0);
 			clEnqueueNDRangeKernel(env.queue(), krn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
 			clWaitForEvents(1, &rune);
-			dev1 = static_cast<cl_float*>(clEnqueueMapBuffer(env.queue(), data1.block(), CL_TRUE, CL_MAP_READ, 0, data1.size(), 0, NULL, &mape1, &err));
+			dev1 = static_cast<cl_float*>(clEnqueueMapBuffer(env.txQueue(), data1.block(), CL_TRUE, CL_MAP_READ, 0, data1.size(), 0, NULL, &mape1, &err));
 			for (int i = 0; i < bufsz; ++i) {
 				host1[i] = dev1[i];
 			}
@@ -133,7 +133,7 @@ _X_TIMER_SETUP
 		{
 			fprintf(stderr, "\rITER %d", i);
 			cl_event mape0, unmape0, rune, mape1, unmape1;
-			dev0 = static_cast<cl_float*>(clEnqueueMapBuffer(env.queue(), data0.block(), CL_TRUE, CL_MAP_WRITE, 0, data0.size(), 0, NULL, &mape0, &err));
+			dev0 = static_cast<cl_float*>(clEnqueueMapBuffer(env.txQueue(), data0.block(), CL_TRUE, CL_MAP_WRITE, 0, data0.size(), 0, NULL, &mape0, &err));
 			for (int i = 0; i < bufsz; ++i) {
 				dev0[i] = host0[i];
 			}
@@ -141,7 +141,7 @@ _X_TIMER_SETUP
 			clWaitForEvents(1, &unmape0);
 			clEnqueueNDRangeKernel(env.queue(), ikrn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
 			clWaitForEvents(1, &rune);
-			dev1 = static_cast<cl_float*>(clEnqueueMapBuffer(env.queue(), data1.block(), CL_TRUE, CL_MAP_READ, 0, data1.size(), 0, NULL, &mape1, &err));
+			dev1 = static_cast<cl_float*>(clEnqueueMapBuffer(env.txQueue(), data1.block(), CL_TRUE, CL_MAP_READ, 0, data1.size(), 0, NULL, &mape1, &err));
 			for (int i = 0; i < bufsz; ++i) {
 				host1[i] = dev1[i];
 			}
