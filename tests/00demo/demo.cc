@@ -162,8 +162,8 @@ _X_TIMER_SETUP
 		sprintf(xopts, "-DFILTW=%d", xfw);
 		sprintf(yopts, "-DFILTW=%d", yfw);
 
-		Program	xpre(env, "xpre.cl", xopts);
-		Program	ypre(env, "ypre.cl", yopts);
+		Program	xpre(env, "cache.cl", xopts);
+		Program	ypre(env, "cache.cl", yopts);
 		Program xlanc(env, "xlanc.cl", xopts);
 		Program ylanc(env, "ylanc.cl", yopts);
 		
@@ -177,10 +177,10 @@ _X_TIMER_SETUP
 		Kernel fy_v(ylanc, "filter");
 
 		Buffer<cl_short>
-			xlf(env, MemoryType::ReadWrite, xfw * (out_width+5)),
-			xcf(env, MemoryType::ReadWrite, xfw * ((out_width / 2)+5)),
-			ylf(env, MemoryType::ReadWrite, yfw * (out_height+5)),
-			ycf(env, MemoryType::ReadWrite, yfw * ((out_height / 2)+5));
+			xlf(env, MemoryType::ReadWrite, xfw * (out_width)),
+			xcf(env, MemoryType::ReadWrite, xfw * ((out_width / 2)+1)),
+			ylf(env, MemoryType::ReadWrite, yfw * (out_height)),
+			ycf(env, MemoryType::ReadWrite, yfw * ((out_height / 2)+1));
 
 		try {
 			cl_event rev;
