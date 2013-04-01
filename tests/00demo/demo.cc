@@ -162,12 +162,13 @@ _X_TIMER_SETUP
 		sprintf(xopts, "-DFILTW=%d", xfw);
 		sprintf(yopts, "-DFILTW=%d", yfw);
 
-		Program	pregen(env, "pregen.cl");
+		Program	xpre(env, "xpre.cl", xopts);
+		Program	ypre(env, "ypre.cl", yopts);
 		Program xlanc(env, "xlanc.cl", xopts);
 		Program ylanc(env, "ylanc.cl", yopts);
 		
-		Kernel cache(pregen, "cache");
-		Kernel cache2(pregen, "cache2");
+		Kernel xcache(xpre, "cache");
+		Kernel ycache(ypre, "cache");
 		Kernel fx_y(xlanc, "filter");
 		Kernel fx_u(xlanc, "filter");
 		Kernel fx_v(xlanc, "filter");
@@ -175,7 +176,7 @@ _X_TIMER_SETUP
 		Kernel fy_u(ylanc, "filter");
 		Kernel fy_v(ylanc, "filter");
 
-		Buffer<cl_float>
+		Buffer<cl_short>
 			xlf(env, MemoryType::ReadWrite, xfw * (out_width+5)),
 			xcf(env, MemoryType::ReadWrite, xfw * ((out_width / 2)+5)),
 			ylf(env, MemoryType::ReadWrite, yfw * (out_height+5)),
@@ -184,24 +185,24 @@ _X_TIMER_SETUP
 		try {
 			cl_event rev;
 
-			cache.setArgument(0, x_scale);
-			cache.setArgumentBuffer(1, xlf);
-			rev = cache.run(out_width);
+			xcache.setArgument(0, x_scale);
+			xcache.setArgumentBuffer(1, xlf);
+			rev = xcache.run(out_width);
 			clWaitForEvents(1, &rev);
 
-			cache2.setArgument(0, x_scale);
-			cache2.setArgumentBuffer(1, xcf);
-			rev = cache2.run(out_width/2);
+			xcache.setArgument(0, x_scale);
+			xcache.setArgumentBuffer(1, xcf);
+			rev = xcache.run(out_width/2);
 			clWaitForEvents(1, &rev);
 
-			cache.setArgument(0, y_scale);
-			cache.setArgumentBuffer(1, ylf);
-			rev = cache.run(out_height);
+			ycache.setArgument(0, y_scale);
+			ycache.setArgumentBuffer(1, ylf);
+			rev = ycache.run(out_height);
 			clWaitForEvents(1, &rev);
 
-			cache2.setArgument(0, y_scale);
-			cache2.setArgumentBuffer(1, ycf);
-			rev = cache2.run(out_height/2);
+			ycache.setArgument(0, y_scale);
+			ycache.setArgumentBuffer(1, ycf);
+			rev = ycache.run(out_height/2);
 			clWaitForEvents(1, &rev);
 
 		} catch (string s) {

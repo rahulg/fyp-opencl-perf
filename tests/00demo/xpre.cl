@@ -11,7 +11,7 @@ inline float lanczos3(float x) {
 			3.0f*sinpi(x)*sinpi(x/3.0f)/(M_PI*M_PI*x*x));
 }
 
-__kernel void cache(float scale, __global float* filter) {
+__kernel void cache(float scale, __global short* filter) {
 
 	int x = get_global_id(0);
 
@@ -19,26 +19,23 @@ __kernel void cache(float scale, __global float* filter) {
 	int left = convert_int(floor(convert_float(x-2) / scale));
 	int right = convert_int(ceil(convert_float(x+3) / scale));
 
-	int fw = right-left + 1, n = 0;
+	float ffilter[FILTW], fweight=0.0f;
+	int n = 0;
 
 	for (int i = left; i <= right; ++i, ++n) {
-		filter[x*fw+n] = lanczos3(centre - i);
+		ffilter[n] = lanczos3(centre - i);
+		fweight += ffilter[n];
 	}
 
-}
-
-__kernel void cache2(float scale, __global float* filter) {
-
-	int x = get_global_id(0);
-
-	float centre = convert_float(x) / scale;
-	int left = convert_int(floor(convert_float(x-2) / scale));
-	int right = convert_int(ceil(convert_float(x+3) / scale));
-
-	int fw = right-left + 1, n = 0;
-
+	n = 0;
+	// normalise floatfilter
 	for (int i = left; i <= right; ++i, ++n) {
-		filter[x*fw+n] = lanczos3(centre - i);
+		ffilter[n] /= fweight;
+	}
+
+	n = 0;
+	for (int i = left; i <= right; ++i, ++n) {
+		filter[x*FILTW+n] = convert_short(ffilter[n] * 32767.0f);
 	}
 
 }

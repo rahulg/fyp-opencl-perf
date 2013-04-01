@@ -1,6 +1,6 @@
 __constant sampler_t sampler_lin = CLK_NORMALIZED_COORDS_FALSE | CLK_FILTER_NEAREST | CLK_ADDRESS_CLAMP_TO_EDGE;
 
-__kernel void filter(float scale, int height, __global float* filter, __read_only image2d_t img_in, __write_only image2d_t img_out) {
+__kernel void filter(float scale, int height, __global short* filter, __read_only image2d_t img_in, __write_only image2d_t img_out) {
 	
 	int x = get_global_id(0);
 	int y = get_global_id(1);
@@ -8,15 +8,15 @@ __kernel void filter(float scale, int height, __global float* filter, __read_onl
 	int left = convert_int(floor(convert_float(y-2) / scale));
 	int right = convert_int(ceil(convert_float(y+3) / scale));
 
-	float density = 0.0f, lanc;
+	int density = 0, lanc;
 	int n = 0;
 
-	float4 sampled = (float4)(0.0f,0.0f,0.0f,0.0f);
+	int4 sampled = (int4)(0,0,0,0);
 
 	for (int i = 0; i < FILTW; ++i, ++n) {
-		lanc = filter[y*FILTW+n];
+		lanc = convert_int(filter[y*FILTW+n]);
 		density += lanc;
-		sampled += lanc * convert_float4(read_imageui(img_in, sampler_lin, (int2)(x, left+i)));
+		sampled += lanc * convert_int4(read_imageui(img_in, sampler_lin, (int2)(x, left+i)));
 	}
 
 	sampled /= density;
