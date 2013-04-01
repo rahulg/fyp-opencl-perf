@@ -45,6 +45,8 @@ _X_TIMER_SETUP
 
 		krn.setArgumentBuffer(0, data0);
 		krn.setArgumentBuffer(1, data1);
+		ikrn.setArgumentBuffer(0, data0);
+		ikrn.setArgumentBuffer(1, data1);
 
 		cl_float *host0 = (cl_float*)valloc(sizeof(cl_float) * bufsz);
 		cl_float *host1 = (cl_float*)valloc(sizeof(cl_float) * bufsz);
