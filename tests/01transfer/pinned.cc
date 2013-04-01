@@ -37,18 +37,21 @@ _X_TIMER_SETUP
 
 		Environment env(DeviceType::GPU);
 		Program pg(env, "testpgm.cl");
-		Kernel krn(pg, "testkern");
+		Kernel krn(pg, "copy");
+		Kernel ikrn(pg, "intense");
 
-		Buffer<cl_float> data0(env, MemoryType::ReadWrite, bufsz);
-		Buffer<cl_float> data1(env, MemoryType::ReadWrite, bufsz);
+		Buffer<cl_float> data0(env, MemoryType::ReadOnly, bufsz);
+		Buffer<cl_float> data1(env, MemoryType::WriteOnly, bufsz);
 
 		krn.setArgumentBuffer(0, data0);
 		krn.setArgumentBuffer(1, data1);
+		ikrn.setArgumentBuffer(0, data0);
+		ikrn.setArgumentBuffer(1, data1);
 
 		Buffer<cl_float> h0(env, MemoryType::PinnedReadWrite, bufsz);
 		Buffer<cl_float> h1(env, MemoryType::PinnedReadWrite, bufsz);
-		h0.map(MapMode::ReadWrite);
-		h1.map(MapMode::ReadWrite);
+		h0.map(MapMode::Write);
+		h1.map(MapMode::Read);
 		cl_float *host0 = h0.data();
 		cl_float *host1 = h1.data();
 
@@ -61,16 +64,61 @@ _X_TIMER_SETUP
 		double wrtime=0.0, runtime=0.0, retime=0.0;
 		uint64_t stime, etime;
 
+		for (int i = 0; i < WARMUPITER; ++i)
+		{
+			fprintf(stderr, "\rWARM %d", i);
+			cl_event wre, rune, ree;
+			clEnqueueWriteBuffer(env.txQueue(), data0.block(), CL_TRUE, 0, data0.size(), host0, 0, NULL, &wre);
+			clEnqueueNDRangeKernel(env.queue(), krn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
+			clWaitForEvents(1, &rune);
+			clEnqueueReadBuffer(env.txQueue(), data1.block(), CL_TRUE, 0, data1.size(), host1, 0, NULL, &ree);
+			clWaitForEvents(1, &ree);
+
+			CLEV_TIME(wre, wrtime);
+			CLEV_TIME(rune, runtime);
+			CLEV_TIME(ree, retime);
+		}
+
+		cerr << "\nCopy kernel:" << endl;
+
 		stime = _x_time();
 
 		for (int i = 0; i < ITER; ++i)
 		{
 			fprintf(stderr, "\rITER %d", i);
 			cl_event wre, rune, ree;
-			clEnqueueWriteBuffer(env.queue(), data0.block(), CL_TRUE, 0, data0.size(), host0, 0, NULL, &wre);
+			clEnqueueWriteBuffer(env.txQueue(), data0.block(), CL_TRUE, 0, data0.size(), host0, 0, NULL, &wre);
 			clEnqueueNDRangeKernel(env.queue(), krn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
 			clWaitForEvents(1, &rune);
-			clEnqueueReadBuffer(env.queue(), data1.block(), CL_TRUE, 0, data1.size(), host1, 0, NULL, &ree);
+			clEnqueueReadBuffer(env.txQueue(), data1.block(), CL_TRUE, 0, data1.size(), host1, 0, NULL, &ree);
+			clWaitForEvents(1, &ree);
+
+			CLEV_TIME(wre, wrtime);
+			CLEV_TIME(rune, runtime);
+			CLEV_TIME(ree, retime);
+		}
+
+		etime = _x_time();
+		fprintf(stderr, "\n");
+
+		cerr << "WRI: " << wrtime / ITER << endl;
+		cerr << "RUN: " << runtime / ITER << endl;
+		cerr << "REA: " << retime / ITER << endl;
+		cerr << "CTM: " << (double)(etime-stime)/1000000ll / ITER << endl;
+		cerr << "FPS: " << ITER * 1000 / ((double)(etime-stime)/1000000ll) << endl;
+
+		cerr << "Intense kernel:" << endl;
+
+		stime = _x_time();
+
+		for (int i = 0; i < ITER; ++i)
+		{
+			fprintf(stderr, "\rITER %d", i);
+			cl_event wre, rune, ree;
+			clEnqueueWriteBuffer(env.txQueue(), data0.block(), CL_TRUE, 0, data0.size(), host0, 0, NULL, &wre);
+			clEnqueueNDRangeKernel(env.queue(), ikrn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
+			clWaitForEvents(1, &rune);
+			clEnqueueReadBuffer(env.txQueue(), data1.block(), CL_TRUE, 0, data1.size(), host1, 0, NULL, &ree);
 			clWaitForEvents(1, &ree);
 
 			CLEV_TIME(wre, wrtime);

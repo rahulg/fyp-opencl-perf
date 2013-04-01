@@ -30,7 +30,7 @@ BUILDS=$(SOURCE:%.cc=cc-%)
 
 .PHONY: all debug force_look clean
 
-all: CXXFLAGS += -O3
+all: CXXFLAGS += -O4
 all: $(BUILDS)
 
 debug: CXXFLAGS += -O0 -DDEBUG -g

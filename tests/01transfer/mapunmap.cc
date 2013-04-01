@@ -37,16 +37,19 @@ _X_TIMER_SETUP
 
 		Environment env(DeviceType::GPU);
 		Program pg(env, "testpgm.cl");
-		Kernel krn(pg, "testkern");
+		Kernel krn(pg, "copy");
+		Kernel ikrn(pg, "intense");
 
-		Buffer<cl_float> data0(env, MemoryType::ReadWrite, bufsz);
-		Buffer<cl_float> data1(env, MemoryType::ReadWrite, bufsz);
+		Buffer<cl_float> data0(env, MemoryType::ReadOnly, bufsz);
+		Buffer<cl_float> data1(env, MemoryType::WriteOnly, bufsz);
 
 		krn.setArgumentBuffer(0, data0);
 		krn.setArgumentBuffer(1, data1);
+		ikrn.setArgumentBuffer(0, data0);
+		ikrn.setArgumentBuffer(1, data1);
 
-		cl_float *host0 = new cl_float[bufsz];
-		cl_float *host1 = new cl_float[bufsz];
+		cl_float *host0 = (cl_float*)valloc(sizeof(cl_float) * bufsz);
+		cl_float *host1 = (cl_float*)valloc(sizeof(cl_float) * bufsz);
 		cl_float *dev0, *dev1;
 
 		for (int i = 0; i < bufsz; ++i)
@@ -59,6 +62,30 @@ _X_TIMER_SETUP
 		uint64_t stime, etime;
 		cl_int err;
 
+		for (int i = 0; i < WARMUPITER; ++i)
+		{
+			fprintf(stderr, "\rWARM %d", i);
+			cl_event mape0, unmape0, rune, mape1, unmape1;
+			dev0 = static_cast<cl_float*>(clEnqueueMapBuffer(env.txQueue(), data0.block(), CL_TRUE, CL_MAP_WRITE, 0, data0.size(), 0, NULL, &mape0, &err));
+			memcpy(dev0, host0, bufsz);
+			clEnqueueUnmapMemObject(env.txQueue(), data0.block(), dev0, 0, NULL, &unmape0);
+			clWaitForEvents(1, &unmape0);
+			clEnqueueNDRangeKernel(env.queue(), krn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
+			clWaitForEvents(1, &rune);
+			dev1 = static_cast<cl_float*>(clEnqueueMapBuffer(env.txQueue(), data1.block(), CL_TRUE, CL_MAP_READ, 0, data1.size(), 0, NULL, &mape1, &err));
+			memcpy(host1, dev1, bufsz);
+			clEnqueueUnmapMemObject(env.txQueue(), data1.block(), dev1, 0, NULL, &unmape1);
+			clWaitForEvents(1, &unmape1);
+
+			CLEV_TIME(mape0, map0);
+			CLEV_TIME(unmape0, unmap0);
+			CLEV_TIME(rune, runtime);
+			CLEV_TIME(mape1, map1);
+			CLEV_TIME(unmape1, unmap1);
+		}
+
+		cerr << "\nCopy kernel:" << endl;
+
 		stime = _x_time();
 
 		for (int i = 0; i < ITER; ++i)
@@ -69,7 +96,7 @@ _X_TIMER_SETUP
 			for (int i = 0; i < bufsz; ++i) {
 				dev0[i] = host0[i];
 			}
-			clEnqueueUnmapMemObject(env.queue(), data0.block(), dev0, 0, NULL, &unmape0);
+			clEnqueueUnmapMemObject(env.txQueue(), data0.block(), dev0, 0, NULL, &unmape0);
 			clWaitForEvents(1, &unmape0);
 			clEnqueueNDRangeKernel(env.queue(), krn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
 			clWaitForEvents(1, &rune);
@@ -77,7 +104,7 @@ _X_TIMER_SETUP
 			for (int i = 0; i < bufsz; ++i) {
 				host1[i] = dev1[i];
 			}
-			clEnqueueUnmapMemObject(env.queue(), data1.block(), dev1, 0, NULL, &unmape1);
+			clEnqueueUnmapMemObject(env.txQueue(), data1.block(), dev1, 0, NULL, &unmape1);
 			clWaitForEvents(1, &unmape1);
 
 			CLEV_TIME(mape0, map0);
@@ -98,8 +125,50 @@ _X_TIMER_SETUP
 		cerr << "CTM: " << (double)(etime-stime)/1000000ll / ITER << endl;
 		cerr << "FPS: " << ITER * 1000 / ((double)(etime-stime)/1000000ll) << endl;
 
-		delete[] host0;
-		delete[] host1;
+		cerr << "Intense kernel:" << endl;
+		
+		stime = _x_time();
+
+		for (int i = 0; i < ITER; ++i)
+		{
+			fprintf(stderr, "\rITER %d", i);
+			cl_event mape0, unmape0, rune, mape1, unmape1;
+			dev0 = static_cast<cl_float*>(clEnqueueMapBuffer(env.queue(), data0.block(), CL_TRUE, CL_MAP_WRITE, 0, data0.size(), 0, NULL, &mape0, &err));
+			for (int i = 0; i < bufsz; ++i) {
+				dev0[i] = host0[i];
+			}
+			clEnqueueUnmapMemObject(env.txQueue(), data0.block(), dev0, 0, NULL, &unmape0);
+			clWaitForEvents(1, &unmape0);
+			clEnqueueNDRangeKernel(env.queue(), ikrn.kernel(), 1, NULL, &iter, NULL, 0, NULL, &rune);
+			clWaitForEvents(1, &rune);
+			dev1 = static_cast<cl_float*>(clEnqueueMapBuffer(env.queue(), data1.block(), CL_TRUE, CL_MAP_READ, 0, data1.size(), 0, NULL, &mape1, &err));
+			for (int i = 0; i < bufsz; ++i) {
+				host1[i] = dev1[i];
+			}
+			clEnqueueUnmapMemObject(env.txQueue(), data1.block(), dev1, 0, NULL, &unmape1);
+			clWaitForEvents(1, &unmape1);
+
+			CLEV_TIME(mape0, map0);
+			CLEV_TIME(unmape0, unmap0);
+			CLEV_TIME(rune, runtime);
+			CLEV_TIME(mape1, map1);
+			CLEV_TIME(unmape1, unmap1);
+		}
+
+		etime = _x_time();
+		fprintf(stderr, "\n");
+
+		cerr << "MP0: " << map0 / ITER << endl;
+		cerr << "UM0: " << unmap0 / ITER << endl;
+		cerr << "RUN: " << runtime / ITER << endl;
+		cerr << "MP1: " << map1 / ITER << endl;
+		cerr << "UM1: " << unmap1 / ITER << endl;
+		cerr << "CTM: " << (double)(etime-stime)/1000000ll / ITER << endl;
+		cerr << "FPS: " << ITER * 1000 / ((double)(etime-stime)/1000000ll) << endl;
+
+
+		free(host0);
+		free(host1);
 
 	} catch (string s) {
 _X_TIMER_TEARDOWN

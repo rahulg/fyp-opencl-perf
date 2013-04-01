@@ -11,7 +11,7 @@ inline float lanczos3(float x) {
 			3.0f*sinpi(x)*sinpi(x/3.0f)/(M_PI*M_PI*x*x));
 }
 
-__kernel void testkern(__global float* infilter, __global float* filter) {
+__kernel void intense(__global float* infilter, __global float* filter) {
 
 	int x = get_global_id(0);
 
@@ -23,4 +23,9 @@ __kernel void testkern(__global float* infilter, __global float* filter) {
 
 	filter[x] = temp;
 
+}
+
+__kernel void copy(__global float* infilter, __global float* filter) {
+	int x = get_global_id(0);
+	filter[x] = infilter[x];
 }
