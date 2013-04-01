@@ -1,0 +1,17 @@
+{
+	"folders":
+	[
+		{
+			"path": "/Users/rahul/Projects/fyp/tests/04bcpuib"
+		}
+	],
+	"settings":
+	{
+		"sublimeclang_options":
+		[
+			"-I/usr/lib/c++/v1/",
+			"-I${this_file_path}/../..",
+			"-Wno-format"
+		]
+	}
+}
