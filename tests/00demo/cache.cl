@@ -1,5 +1,5 @@
 #ifndef M_PI
-#define M_PI 3.141592653589793
+#define M_PI 3.141592653589793f
 #endif
 #define LANC_EPSILON (1e-9f)
 
