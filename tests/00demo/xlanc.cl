@@ -21,6 +21,8 @@ __kernel void filter(float scale, int height, __global short* filter, __read_onl
 
 	sampled /= density;
 
+	sampled = clamp(sampled, (int4)(0,0,0,0), (int4)(255,255,255,255));
+
 	write_imageui(img_out, (int2)(x, y), convert_uint4(sampled));
 
 }
