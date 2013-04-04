@@ -27,15 +27,13 @@ __kernel void cache(float scale, __global short* filter) {
 		fweight += ffilter[n];
 	}
 
-	n = 0;
 	// normalise floatfilter
-	for (int i = left; i <= right; ++i, ++n) {
-		ffilter[n] /= fweight;
+	for (int i = 0; i < FILTW; ++i) {
+		ffilter[i] /= fweight;
 	}
 
-	n = 0;
-	for (int i = left; i <= right; ++i, ++n) {
-		filter[x*FILTW+n] = convert_short(ffilter[n] * 32767.0f);
+	for (int i = 0; i < FILTW; ++i) {
+		filter[x*FILTW+i] = convert_short(ffilter[i] * 32767.0f);
 	}
 
 }
