@@ -146,7 +146,6 @@ _X_TIMER_SETUP
 			right = (int)ceilf((float)(midpt+3) / x_scale);
 
 			xfw = right-left+1;
-			xfw = xfw < 6 ? 6 : xfw;
 
 			midpt = out_height/2;
 			left = (int)floorf((float)(midpt-2) / y_scale);
