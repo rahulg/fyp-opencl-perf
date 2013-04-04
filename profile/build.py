@@ -3,27 +3,23 @@
 import os, shlex, subprocess, sys
 
 config = {
-	'subdirs': ['derpcl','profile','tests'],
+	'subdirs': [ name for name in os.listdir(os.getcwd()) if os.path.isdir(os.path.join(os.getcwd(), name)) ],
 	'rules': ['all', 'debug', 'clean'],
 	'default_rule': 'all',
 	'sources': []
 }
 
 def build(rule, subdirs):
-	rcs = []
+	procs = []
 	pwd = os.getcwd()
 
 	for subdir in subdirs:
 		os.chdir(subdir)
-		if subdir == 'derpcl':
-			rc = subprocess.call(['make', rule])
-			rcs.append((subdir, rc))
-		elif subdir == 'tests' or subdir == 'profile':
-			rc = subprocess.call(['./build.py', rule])
-			rcs.append((subdir, rc))
+		p = subprocess.Popen(['make', rule])
+		procs.append((subdir, p))
 		os.chdir(pwd)
-
-	return rcs
+	
+	return procs
 
 def main():
 	try:
@@ -43,10 +39,11 @@ def main():
 	else:
 		subdirs = config['subdirs']
 
-	rcs = build(rule,subdirs)
+	procs = build(rule,subdirs)
 	failed = False
 
-	for subdir, rc in rcs:
+	for subdir, p in procs:
+		rc = p.wait()
 		if rc != 0:
 			print('build: ' + subdir + ' failed.')
 			failed = True
